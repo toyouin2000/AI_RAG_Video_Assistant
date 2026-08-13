@@ -1,1 +1,16 @@
+venv/
 .env
+__pycache__/
+*.pyc
+
+vector_db/
+.chroma/
+
+*.mp3
+*.wav
+*.mp4
+*.webm
+*.m4a
+*.mov
+
+.streamlit/secrets.toml
