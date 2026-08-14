@@ -153,6 +153,14 @@ def download_youtube_audio(url: str) -> str:
                 "path": deno_path,
             }
         },
+        "extractor_args": {
+            "youtube": {
+                "player_client": [
+                    "web_embedded",
+                    "android_vr",
+                ]
+            }
+        },
 
         # Try multiple times
         "retries": 5,
