@@ -88,12 +88,10 @@ def run_ffmpeg(
 
 def download_youtube_audio(url: str) -> str:
     """
-    Download audio from YouTube and convert it to WAV.
+    Download YouTube audio and convert it to WAV.
 
-    yt-dlp requires:
-    - yt-dlp-ejs
-    - a JavaScript runtime
-    - FFmpeg for post-processing
+    Uses Deno + yt-dlp EJS support for YouTube's
+    current JavaScript challenge requirements.
     """
 
     ffmpeg_path = shutil.which("ffmpeg")
@@ -110,23 +108,23 @@ def download_youtube_audio(url: str) -> str:
     if not ffprobe_path:
         raise RuntimeError("FFprobe is not installed.")
 
-    # Verify Deno actually executes
-    deno_result = subprocess.run(
+    if not deno_path:
+        raise RuntimeError("Deno is not available.")
+
+    # Verify Deno
+    result = subprocess.run(
         [deno_path, "--version"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         timeout=15,
     )
 
-    if deno_result.returncode != 0:
+    if result.returncode != 0:
         raise RuntimeError(
-            "Deno was found but could not be executed:\n"
-            + deno_result.stderr
+            f"Deno execution failed:\n{result.stderr}"
         )
 
-    print("Deno version:")
-    print(deno_result.stdout)
+    print(result.stdout)
 
     output_template = os.path.join(
         DOWNLOAD_DIR,
@@ -134,20 +132,40 @@ def download_youtube_audio(url: str) -> str:
     )
 
     ydl_opts = {
-        "format": "bestaudio/best",
+        # Prefer audio-only formats but allow fallback
+        "format": (
+            "bestaudio[ext=m4a]/"
+            "bestaudio[ext=webm]/"
+            "bestaudio/"
+            "best"
+        ),
 
         "outtmpl": output_template,
 
-        # yt-dlp EJS challenge solver
-        "remote_components": ["ejs:github"],
+        # YouTube EJS
+        "remote_components": [
+            "ejs:github"
+        ],
 
-        # Explicitly tell yt-dlp which Deno executable to use
+        # Explicit Deno
         "js_runtimes": {
             "deno": {
                 "path": deno_path,
             }
         },
 
+        # Try multiple times
+        "retries": 5,
+        "fragment_retries": 5,
+        "file_access_retries": 5,
+
+        # Don't use playlist
+        "noplaylist": True,
+
+        # Don't reuse stale downloaded files
+        "overwrites": True,
+
+        # FFmpeg conversion
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -156,9 +174,6 @@ def download_youtube_audio(url: str) -> str:
             }
         ],
 
-        "noplaylist": True,
-
-        # Keep logs visible while debugging deployment
         "quiet": False,
         "no_warnings": False,
     }
@@ -172,7 +187,9 @@ def download_youtube_audio(url: str) -> str:
                 download=True,
             )
 
-            downloaded_path = ydl.prepare_filename(info)
+            downloaded_path = (
+                ydl.prepare_filename(info)
+            )
 
     except Exception as e:
 
@@ -180,43 +197,45 @@ def download_youtube_audio(url: str) -> str:
             f"YouTube download failed:\n{e}"
         ) from e
 
-    # yt-dlp's FFmpegExtractAudio changes extension to .wav
-    base_path = os.path.splitext(downloaded_path)[0]
+    base_path = os.path.splitext(
+        downloaded_path
+    )[0]
 
     wav_path = base_path + ".wav"
 
     if not os.path.exists(wav_path):
 
-        # Some formats can result in webm/m4a first.
         possible_files = [
             base_path + ".webm",
             base_path + ".m4a",
+            base_path + ".mp4",
             downloaded_path,
         ]
 
         source_file = None
 
         for candidate in possible_files:
+
             if os.path.exists(candidate):
+
                 source_file = candidate
                 break
 
         if source_file is None:
-            raise FileNotFoundError(
-                "YouTube download completed but "
-                "the audio file could not be found."
-            )
 
-        wav_path = base_path + ".wav"
+            raise FileNotFoundError(
+                "YouTube audio was downloaded "
+                "but the resulting file was not found."
+            )
 
         run_ffmpeg(
             source_file,
             wav_path,
+            sample_rate=16000,
+            channels=1,
         )
 
     return wav_path
-
-
 def convert_to_wav(input_path: str) -> str:
     """
     Convert any audio/video file to 16kHz mono WAV.
