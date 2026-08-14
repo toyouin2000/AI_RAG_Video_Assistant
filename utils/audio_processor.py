@@ -1,179 +1,199 @@
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import yt_dlp
+from pydub import AudioSegment
 
 
-DOWNLOAD_DIR = "downloades"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+DOWNLOAD_DIR = Path("downloads")
+DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+BGUTIL_HOME = Path.home() / "bgutil-ytdlp-pot-provider"
 
 
-def get_deno_path() -> str:
+def find_executable(name: str):
+    return shutil.which(name)
+
+
+def get_deno():
     """
-    Locate the Deno binary installed by the Python `deno` package.
-    """
-
-    # First try PATH
-    deno_path = shutil.which("deno")
-
-    if deno_path:
-        return deno_path
-
-    # Fall back to the Python Deno package
-    try:
-        import deno
-
-        deno_path = deno.find_deno_bin()
-
-        if deno_path and os.path.exists(deno_path):
-            return deno_path
-
-    except Exception as e:
-        print(f"Could not locate Deno through Python package: {e}")
-
-    raise RuntimeError(
-        "Deno was not found. "
-        "Make sure `deno==2.9.3` is installed."
-    )
-
-
-def run_ffmpeg(
-    input_path: str,
-    output_path: str,
-    sample_rate: int = 16000,
-    channels: int = 1,
-) -> str:
-    """
-    Convert audio/video to WAV using the system FFmpeg binary.
+    Deno is installed through the Python environment.
+    Do not install it through apt/packages.txt.
     """
 
-    ffmpeg_path = shutil.which("ffmpeg")
+    deno = shutil.which("deno")
 
-    if not ffmpeg_path:
-        raise RuntimeError(
-            "FFmpeg is not installed or not available in PATH."
-        )
+    if deno:
+        return deno
 
-    command = [
-        ffmpeg_path,
-        "-y",
-        "-i",
-        input_path,
-        "-vn",
-        "-ac",
-        str(channels),
-        "-ar",
-        str(sample_rate),
-        "-c:a",
-        "pcm_s16le",
-        output_path,
+    candidates = [
+        "/home/adminuser/venv/bin/deno",
+        "/home/oai/share/deno",
+        "/usr/local/bin/deno",
+        "/usr/bin/deno",
     ]
 
-    result = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    for path in candidates:
+        if os.path.exists(path):
+            return path
 
-    if result.returncode != 0:
+    return None
+
+
+def setup_environment():
+
+    ffmpeg = find_executable("ffmpeg")
+
+    if not ffmpeg:
         raise RuntimeError(
-            "FFmpeg conversion failed:\n"
-            + result.stderr
+            "FFmpeg is not installed. "
+            "Add ffmpeg to packages.txt."
         )
 
-    return output_path
+    print(f"FFmpeg: {ffmpeg}")
 
+    ffprobe = find_executable("ffprobe")
 
-def download_youtube_audio(url: str) -> str:
-    """
-    Download YouTube audio and convert it to WAV.
+    if ffprobe:
+        print(f"FFprobe: {ffprobe}")
 
-    Uses Deno + yt-dlp EJS support for YouTube's
-    current JavaScript challenge requirements.
-    """
+    deno = get_deno()
 
-    ffmpeg_path = shutil.which("ffmpeg")
-    ffprobe_path = shutil.which("ffprobe")
-    deno_path = get_deno_path()
+    if deno:
 
-    print("FFmpeg:", ffmpeg_path)
-    print("FFprobe:", ffprobe_path)
-    print("Deno:", deno_path)
+        print(f"Deno: {deno}")
 
-    if not ffmpeg_path:
-        raise RuntimeError("FFmpeg is not installed.")
+        try:
+            result = subprocess.run(
+                [deno, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
 
-    if not ffprobe_path:
-        raise RuntimeError("FFprobe is not installed.")
+            print(result.stdout)
 
-    if not deno_path:
-        raise RuntimeError("Deno is not available.")
+        except Exception as e:
+            print(f"Deno check failed: {e}")
 
-    # Verify Deno
-    result = subprocess.run(
-        [deno_path, "--version"],
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
-
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Deno execution failed:\n{result.stderr}"
+    else:
+        print(
+            "WARNING: Deno was not found."
         )
 
-    print(result.stdout)
-
-    output_template = os.path.join(
-        DOWNLOAD_DIR,
-        "%(title)s.%(ext)s",
+    print(
+        "yt-dlp version:",
+        yt_dlp.version.__version__,
     )
 
-    ydl_opts = {
-        # Prefer audio-only formats but allow fallback
-        "format": (
-            "bestaudio[ext=m4a]/"
-            "bestaudio[ext=webm]/"
-            "bestaudio/"
-            "best"
+    return deno
+
+
+def setup_bgutil_script(deno_path):
+    """
+    Install the BgUtils POT generation script if it isn't present.
+
+    The official bgutil provider supports a script mode where yt-dlp
+    invokes the generator when a token is required.
+    """
+
+    server_dir = (
+        BGUTIL_HOME / "server"
+    )
+
+    if server_dir.exists():
+        return server_dir
+
+    print(
+        "Installing BgUtils PO-token provider..."
+    )
+
+    try:
+
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "https://github.com/"
+                "Brainicism/"
+                "bgutil-ytdlp-pot-provider.git",
+                str(BGUTIL_HOME),
+            ],
+            check=True,
+            timeout=180,
+        )
+
+    except Exception as e:
+
+        print(
+            "Could not install BgUtils:",
+            e,
+        )
+
+        return None
+
+    # --------------------------------------------------------
+    # The provider's script method requires its server
+    # dependencies to be installed.
+    # --------------------------------------------------------
+
+    if deno_path:
+
+        try:
+
+            subprocess.run(
+                [
+                    deno_path,
+                    "install",
+                    "--allow-scripts=npm:canvas",
+                    "--frozen",
+                ],
+                cwd=str(server_dir),
+                check=True,
+                timeout=300,
+            )
+
+            print(
+                "BgUtils Deno dependencies installed."
+            )
+
+        except Exception as e:
+
+            print(
+                "BgUtils dependency setup failed:",
+                e,
+            )
+
+    return server_dir
+
+
+def get_ytdlp_options(
+    deno_path,
+    bgutil_server_dir=None,
+):
+
+    options = {
+
+        # Let yt-dlp select the best available audio.
+        "format": "bestaudio/best",
+
+        "outtmpl": str(
+            DOWNLOAD_DIR /
+            "%(title)s.%(ext)s"
         ),
 
-        "outtmpl": output_template,
-
-        # YouTube EJS
-        "remote_components": [
-            "ejs:github"
-        ],
-
-        # Explicit Deno
-        "js_runtimes": {
-            "deno": {
-                "path": deno_path,
-            }
-        },
-        "extractor_args": {
-            "youtube": {
-                "player_client": [
-                    "web_embedded",
-                    "android_vr",
-                ]
-            }
-        },
-
-        # Try multiple times
-        "retries": 5,
-        "fragment_retries": 5,
-        "file_access_retries": 5,
-
-        # Don't use playlist
         "noplaylist": True,
 
-        # Don't reuse stale downloaded files
-        "overwrites": True,
+        "retries": 5,
+        "fragment_retries": 5,
+        "extractor_retries": 3,
 
-        # FFmpeg conversion
+        "continuedl": True,
+
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -184,256 +204,261 @@ def download_youtube_audio(url: str) -> str:
 
         "quiet": False,
         "no_warnings": False,
+
+        # Needed for YouTube JS challenges.
+        "remote_components": [
+            "ejs:github"
+        ],
+
+        "verbose": True,
     }
+
+    # --------------------------------------------------------
+    # Deno
+    # --------------------------------------------------------
+
+    if deno_path:
+
+        options["js_runtimes"] = {
+            "deno": {
+                "path": deno_path
+            }
+        }
+
+    # --------------------------------------------------------
+    # BgUtils script provider
+    # --------------------------------------------------------
+
+    if bgutil_server_dir:
+
+        options["extractor_args"] = {
+            "youtubepot-bgutilscript": {
+                "server_home": str(
+                    bgutil_server_dir
+                )
+            }
+        }
+
+    return options
+
+
+def download_youtube_audio(
+    url: str
+) -> str:
+
+    print(
+        "\n========================================"
+    )
+
+    print(
+        "YouTube download started"
+    )
+
+    print(
+        "========================================"
+    )
+
+    deno_path = setup_environment()
+
+    bgutil_dir = setup_bgutil_script(
+        deno_path
+    )
+
+    ydl_opts = get_ytdlp_options(
+        deno_path,
+        bgutil_dir,
+    )
 
     try:
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(
+            ydl_opts
+        ) as ydl:
 
             info = ydl.extract_info(
                 url,
                 download=True,
             )
 
-            downloaded_path = (
+            prepared_path = Path(
                 ydl.prepare_filename(info)
             )
 
-    except Exception as e:
+    except yt_dlp.utils.DownloadError as e:
 
-        raise RuntimeError(
-            f"YouTube download failed:\n{e}"
-        ) from e
+        message = str(e)
 
-    base_path = os.path.splitext(
-        downloaded_path
-    )[0]
-
-    wav_path = base_path + ".wav"
-
-    if not os.path.exists(wav_path):
-
-        possible_files = [
-            base_path + ".webm",
-            base_path + ".m4a",
-            base_path + ".mp4",
-            downloaded_path,
-        ]
-
-        source_file = None
-
-        for candidate in possible_files:
-
-            if os.path.exists(candidate):
-
-                source_file = candidate
-                break
-
-        if source_file is None:
-
-            raise FileNotFoundError(
-                "YouTube audio was downloaded "
-                "but the resulting file was not found."
-            )
-
-        run_ffmpeg(
-            source_file,
-            wav_path,
-            sample_rate=16000,
-            channels=1,
+        print(
+            "\n========== YOUTUBE ERROR =========="
         )
 
-    return wav_path
-def convert_to_wav(input_path: str) -> str:
-    """
-    Convert any audio/video file to 16kHz mono WAV.
-    """
+        print(message)
 
-    if not os.path.exists(input_path):
+        print(
+            "===================================\n"
+        )
+
+        if "403" in message:
+
+            raise RuntimeError(
+                "YouTube returned HTTP 403.\n\n"
+                "The video was successfully identified, "
+                "but YouTube rejected the media request.\n\n"
+                "Check the verbose logs for:\n"
+                "[pot] PO Token Providers\n\n"
+                "If BgUtils is loaded and 403 remains, "
+                "the Streamlit Cloud IP is likely being "
+                "blocked by YouTube."
+            ) from e
+
+        raise RuntimeError(
+            f"YouTube download failed:\n{message}"
+        ) from e
+
+    # --------------------------------------------------------
+    # Locate WAV
+    # --------------------------------------------------------
+
+    candidates = [
+        prepared_path.with_suffix(".wav"),
+        Path(
+            str(prepared_path)
+            .replace(".webm", ".wav")
+        ),
+        Path(
+            str(prepared_path)
+            .replace(".m4a", ".wav")
+        ),
+        Path(
+            str(prepared_path)
+            .replace(".mp4", ".wav")
+        ),
+    ]
+
+    for path in candidates:
+
+        if path.exists():
+
+            print(
+                f"Downloaded WAV: {path}"
+            )
+
+            return str(path)
+
+    # Fallback
+    wav_files = list(
+        DOWNLOAD_DIR.glob("*.wav")
+    )
+
+    if wav_files:
+
+        latest = max(
+            wav_files,
+            key=lambda p: p.stat().st_mtime,
+        )
+
+        return str(latest)
+
+    raise RuntimeError(
+        "yt-dlp completed but no WAV file "
+        "was produced."
+    )
+
+
+def convert_to_wav(
+    input_path: str
+) -> str:
+
+    input_file = Path(input_path)
+
+    if not input_file.exists():
+
         raise FileNotFoundError(
-            f"Input file not found: {input_path}"
+            f"File not found: {input_path}"
         )
 
     output_path = (
-        os.path.splitext(input_path)[0]
-        + "_converted.wav"
+        input_file.parent
+        / f"{input_file.stem}_converted.wav"
     )
 
-    return run_ffmpeg(
-        input_path=input_path,
-        output_path=output_path,
-        sample_rate=16000,
-        channels=1,
+    audio = AudioSegment.from_file(
+        str(input_file)
     )
 
-
-def get_audio_duration(wav_path: str) -> float:
-    """
-    Get WAV duration using ffprobe.
-    """
-
-    ffprobe_path = shutil.which("ffprobe")
-
-    if not ffprobe_path:
-        raise RuntimeError(
-            "FFprobe is not installed."
-        )
-
-    command = [
-        ffprobe_path,
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        wav_path,
-    ]
-
-    result = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+    audio = (
+        audio
+        .set_channels(1)
+        .set_frame_rate(16000)
     )
 
-    if result.returncode != 0:
-        raise RuntimeError(
-            "FFprobe failed:\n"
-            + result.stderr
-        )
+    audio.export(
+        str(output_path),
+        format="wav",
+    )
 
-    return float(result.stdout.strip())
+    return str(output_path)
 
 
 def chunk_audio(
     wav_path: str,
     chunk_minutes: int = 10,
-) -> list:
-    """
-    Split WAV into chunks using FFmpeg.
+) -> list[str]:
 
-    Default:
-    10-minute chunks.
-    """
+    audio = AudioSegment.from_wav(
+        wav_path
+    )
 
-    if not os.path.exists(wav_path):
-        raise FileNotFoundError(
-            f"WAV file not found: {wav_path}"
-        )
-
-    duration = get_audio_duration(wav_path)
-
-    chunk_seconds = chunk_minutes * 60
+    chunk_ms = (
+        chunk_minutes *
+        60 *
+        1000
+    )
 
     chunks = []
 
-    start = 0
-    index = 0
+    for i, start in enumerate(
+        range(
+            0,
+            len(audio),
+            chunk_ms,
+        )
+    ):
 
-    while start < duration:
+        chunk = audio[
+            start:start + chunk_ms
+        ]
 
         chunk_path = (
-            f"{wav_path}_chunk_{index}.wav"
+            f"{wav_path}"
+            f"_chunk_{i}.wav"
         )
 
-        remaining = duration - start
-
-        current_duration = min(
-            chunk_seconds,
-            remaining,
-        )
-
-        run_ffmpeg_segment(
-            input_path=wav_path,
-            output_path=chunk_path,
-            start_seconds=start,
-            duration_seconds=current_duration,
+        chunk.export(
+            chunk_path,
+            format="wav",
         )
 
         chunks.append(chunk_path)
 
-        start += chunk_seconds
-        index += 1
-
     return chunks
 
 
-def run_ffmpeg_segment(
-    input_path: str,
-    output_path: str,
-    start_seconds: float,
-    duration_seconds: float,
-) -> str:
-    """
-    Extract an audio segment using FFmpeg.
-    """
-
-    ffmpeg_path = shutil.which("ffmpeg")
-
-    if not ffmpeg_path:
-        raise RuntimeError(
-            "FFmpeg is not installed."
-        )
-
-    command = [
-        ffmpeg_path,
-        "-y",
-        "-ss",
-        str(start_seconds),
-        "-i",
-        input_path,
-        "-t",
-        str(duration_seconds),
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-c:a",
-        "pcm_s16le",
-        output_path,
-    ]
-
-    result = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    if result.returncode != 0:
-        raise RuntimeError(
-            "FFmpeg chunking failed:\n"
-            + result.stderr
-        )
-
-    return output_path
-
-
-def process_input(source: str) -> list:
-    """
-    Process either a YouTube URL or a local audio/video file.
-
-    Returns:
-        list[str]: WAV chunk paths
-    """
+def process_input(
+    source: str
+) -> list[str]:
 
     if not source:
         raise ValueError(
-            "Input source cannot be empty."
+            "No input source provided."
         )
 
-    if source.startswith(
-        "http://"
-    ) or source.startswith(
-        "https://"
+    source = source.strip()
+
+    if (
+        source.startswith("http://")
+        or source.startswith("https://")
     ):
-
-        print(
-            "Detected YouTube URL. "
-            "Downloading audio..."
-        )
 
         wav_path = download_youtube_audio(
             source
@@ -442,15 +467,16 @@ def process_input(source: str) -> list:
     else:
 
         print(
-            "Detected local file. "
-            "Converting to WAV..."
+            "Detected local file."
         )
 
         wav_path = convert_to_wav(
             source
         )
 
-    print("Chunking audio...")
+    print(
+        "Chunking audio..."
+    )
 
     chunks = chunk_audio(
         wav_path
