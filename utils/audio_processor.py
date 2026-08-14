@@ -41,6 +41,13 @@ def run_ffmpeg(input_path: str, output_path: str) -> str:
 def download_youtube_audio(url: str) -> str:
     """Download YouTube audio and convert it to WAV."""
 
+
+    import shutil
+
+    print("FFmpeg:", shutil.which("ffmpeg"))
+    print("FFprobe:", shutil.which("ffprobe"))
+    print("Deno:", shutil.which("deno"))
+    
     output_template = os.path.join(
         DOWNLOAD_DIR,
         "%(title)s.%(ext)s"
@@ -49,6 +56,7 @@ def download_youtube_audio(url: str) -> str:
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": output_template,
+        "remote_components": ["ejs:github"],
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
